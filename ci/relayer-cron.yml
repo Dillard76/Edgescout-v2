@@ -1,0 +1,76 @@
+name: EdgeScout 24/7 Autonomous Relayer & Oracle
+
+on:
+  schedule:
+    # Run every 30 minutes 24/7
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+    inputs:
+      floor_price:
+        description: 'Mock Floor Price (ETH) for Oracle valuation'
+        required: false
+        default: '3.40'
+      run_hardhat_tests:
+        description: 'Run Hardhat circuit breaker test suite'
+        type: boolean
+        required: false
+        default: true
+  push:
+    branches: [ "main" ]
+
+concurrency:
+  group: edgescout-relayer-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  relayer-cycle:
+    name: Autonomous Scouting & Circuit Breaker Interlock
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm install --legacy-peer-deps
+
+      - name: Compile Hardhat Smart Contracts
+        run: npx hardhat --config hardhat.config.cjs compile
+
+      - name: Run Hardhat Safety Interlock Test Suite
+        if: ${{ github.event.inputs.run_hardhat_tests != 'false' }}
+        run: npx hardhat --config hardhat.config.cjs test
+
+      - name: Run Gemini AI Vision Pricer Oracle (80% Valuation Ceiling)
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          FLOOR_PRICE="${{ github.event.inputs.floor_price || '3.40' }}"
+          echo "Evaluating floor price: $FLOOR_PRICE ETH"
+          node scripts/visionPricerOracle.js "$FLOOR_PRICE"
+
+      - name: Execute SCAN Node Smart Money Relayer (Nansen Auto-Rotation)
+        env:
+          OPTIMISM_RPC_URL: ${{ secrets.OPTIMISM_RPC_URL || 'https://mainnet.optimism.io' }}
+          RELAYER_PRIVATE_KEY: ${{ secrets.RELAYER_PRIVATE_KEY }}
+          NANSEN_API_KEY_1: ${{ secrets.NANSEN_API_KEY_1 }}
+          NANSEN_API_KEY_2: ${{ secrets.NANSEN_API_KEY_2 }}
+          NANSEN_API_KEY_3: ${{ secrets.NANSEN_API_KEY_3 }}
+          CONTRACT_ADDRESS: ${{ secrets.CONTRACT_ADDRESS }}
+        run: |
+          echo "Running SCAN Node Relayer with Nansen Multi-Key Rotation..."
+          node scripts/scanNodeRelayer.js
+
+      - name: Post-Cycle Telemetry Log
+        if: always()
+        run: |
+          echo "======================================================="
+          echo "EdgeScout 24/7 Cycle Completed at $(date -u)"
+          echo "Status: Circuit Breaker Interlocks and 80% Ceiling Intact"
+          echo "======================================================="

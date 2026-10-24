@@ -40,7 +40,7 @@ export interface ScanNodeState {
 
 export interface BlockchainEvent {
   id: string;
-  eventName: "MarketSignalArchived" | "CircuitBreakerTripped" | "AcquisitionExecuted" | "SecuritySanitizationVerified";
+  eventName: "MarketSignalArchived" | "CircuitBreakerTripped" | "AcquisitionExecuted" | "SecuritySanitizationVerified" | "RelayerCycleExecuted";
   data: Record<string, any>;
   timestamp: string;
   txHash: string;
