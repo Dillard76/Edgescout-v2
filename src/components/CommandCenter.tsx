@@ -14,11 +14,15 @@ import {
   Database,
   ArrowRight,
   Info,
-  DollarSign
+  DollarSign,
+  Key,
+  RefreshCw,
+  Radio
 } from "lucide-react";
 import { BlockchainEvent, OracleResult, ScanNodeState } from "../types";
 import { RiskDashboard } from "./RiskDashboard";
 import { FloorPriceTrendChart } from "./FloorPriceTrendChart";
+import { keyManager, fetchNetflows, fetchWithRetry } from "../utils/apiManager";
 
 interface CommandCenterProps {
   beginnerMode: boolean;
@@ -53,6 +57,23 @@ export const CommandCenter: React.FC<CommandCenterProps> = ({
   const [acquisitionCompleted, setAcquisitionCompleted] = useState<boolean>(false);
   const [executionMessage, setExecutionMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
+  // Nansen KeyManager Pool State
+  const [activeKeyIndex, setActiveKeyIndex] = useState<number>(keyManager.currentIndexValue);
+  const [activeMaskedKey, setActiveMaskedKey] = useState<string>(keyManager.maskedCurrentKey);
+  const [isQueryingNansen, setIsQueryingNansen] = useState<boolean>(false);
+  const [keyToast, setKeyToast] = useState<string | null>(null);
+
+  // Subscribe to key rotations from apiManager
+  useEffect(() => {
+    const unsub = keyManager.onRotate(() => {
+      setActiveKeyIndex(keyManager.currentIndexValue);
+      setActiveMaskedKey(keyManager.maskedCurrentKey);
+      setKeyToast(`Nansen Key Rotated: Key ${keyManager.currentIndexValue + 1}/${keyManager.totalKeys} (${keyManager.maskedCurrentKey})`);
+      setTimeout(() => setKeyToast(null), 3500);
+    });
+    return () => unsub();
+  }, []);
+
   // Trigger initial evaluation
   useEffect(() => {
     evaluateScanNode(netflowUSD, whaleClusterCount);
@@ -63,7 +84,8 @@ export const CommandCenter: React.FC<CommandCenterProps> = ({
     setExecutionMessage(null);
     let data: OracleResult | null = null;
     try {
-      const response = await fetch("/api/oracle/price", {
+      // Use fetchWithRetry from apiManager to handle transient retries
+      const response = await fetchWithRetry("/api/oracle/price", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -175,6 +197,7 @@ export const CommandCenter: React.FC<CommandCenterProps> = ({
           triggeredBy: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8 (SCAN Node Relayer)",
           netflowUSD: flow,
           whaleClusterCount: whales,
+          activeNansenKey: keyManager.maskedCurrentKey,
         },
         timestamp: new Date().toLocaleTimeString(),
         txHash: "0x" + Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join(""),
@@ -182,10 +205,29 @@ export const CommandCenter: React.FC<CommandCenterProps> = ({
     }
 
     try {
-      const response = await fetch("/api/scan-node/evaluate", {
+      // Direct call through apiManager.ts auto-rotating key pool
+      await fetchNetflows({
+        chain: "optimism",
+        netflowUSD: flow,
+        whaleClusterCount: whales,
+      });
+
+      // Synchronize key state
+      setActiveKeyIndex(keyManager.currentIndexValue);
+      setActiveMaskedKey(keyManager.maskedCurrentKey);
+
+      // Perform relayer scan evaluation with current active key header
+      const response = await fetchWithRetry("/api/scan-node/evaluate", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ netflowUSD: flow, whaleClusterCount: whales }),
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": keyManager.currentKey,
+        },
+        body: JSON.stringify({
+          netflowUSD: flow,
+          whaleClusterCount: whales,
+          keyIndex: keyManager.currentIndexValue,
+        }),
       });
       if (response.ok) {
         const data: ScanNodeState = await response.json();
@@ -195,6 +237,41 @@ export const CommandCenter: React.FC<CommandCenterProps> = ({
       // Gracefully fall back to computedState - never throws an unhandled error
     } finally {
       setScanEvaluating(false);
+    }
+  };
+
+  const handleRotateNansenKey = () => {
+    keyManager.rotate();
+    setActiveKeyIndex(keyManager.currentIndexValue);
+    setActiveMaskedKey(keyManager.maskedCurrentKey);
+    onEmitEvent({
+      id: `evt-${Date.now()}-rotate`,
+      eventName: "SecuritySanitizationVerified",
+      data: {
+        action: "Nansen API Key Rotated",
+        activeKeyIndex: `${keyManager.currentIndexValue + 1}/${keyManager.totalKeys}`,
+        activeKey: keyManager.maskedCurrentKey,
+      },
+      timestamp: new Date().toLocaleTimeString(),
+      txHash: "0x" + Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join(""),
+    });
+  };
+
+  const handleSyncLiveNansen = async () => {
+    setIsQueryingNansen(true);
+    try {
+      const data: any = await fetchNetflows({ chain: "optimism" });
+      if (data && typeof data.netflowUSD === "number") {
+        setNetflowUSD(data.netflowUSD);
+        setWhaleClusterCount(data.whaleClusterCount ?? 3);
+        await evaluateScanNode(data.netflowUSD, data.whaleClusterCount ?? 3);
+      }
+      setActiveKeyIndex(keyManager.currentIndexValue);
+      setActiveMaskedKey(keyManager.maskedCurrentKey);
+    } catch (err) {
+      console.warn("Live Nansen sync error:", err);
+    } finally {
+      setIsQueryingNansen(false);
     }
   };
 
@@ -299,6 +376,14 @@ export const CommandCenter: React.FC<CommandCenterProps> = ({
               Try clicking the blue and red buttons below to see how it works!
             </p>
           </div>
+        </div>
+      )}
+
+      {/* Nansen Auto-Rotation Toast Notification */}
+      {keyToast && (
+        <div className="bg-amber-500/10 border border-amber-500/40 rounded-xl p-3 text-xs text-amber-200 flex items-center space-x-2 animate-pulse shadow-sm">
+          <Key className="w-4 h-4 text-amber-400 shrink-0" />
+          <span className="font-mono">🔄 <strong>apiManager Rotation:</strong> {keyToast}</span>
         </div>
       )}
 
@@ -538,6 +623,40 @@ export const CommandCenter: React.FC<CommandCenterProps> = ({
                   )}
                 </div>
                 <p className="mt-1 text-[11px] opacity-80">{scanState?.reason}</p>
+              </div>
+
+              {/* Nansen Multi-Key Auto-Rotation Pool Controller */}
+              <div className="p-3 rounded-lg bg-slate-950 border border-slate-800 space-y-2 text-xs font-mono">
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="text-slate-400 flex items-center space-x-1.5">
+                    <Key className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Nansen Pool:</span>
+                  </span>
+                  <span className="text-amber-300 font-semibold">
+                    Key {activeKeyIndex + 1}/{keyManager.totalKeys} ({activeMaskedKey})
+                  </span>
+                </div>
+                <div className="flex space-x-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={handleRotateNansenKey}
+                    className="flex-1 py-1.5 px-2 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-medium flex items-center justify-center space-x-1 border border-slate-700 transition-colors"
+                    title="Rotate active API key in apiManager pool"
+                  >
+                    <RefreshCw className="w-3 h-3 text-amber-400" />
+                    <span>Rotate Key</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSyncLiveNansen}
+                    disabled={isQueryingNansen}
+                    className="flex-1 py-1.5 px-2 rounded bg-indigo-950/80 hover:bg-indigo-900 text-indigo-300 text-[11px] font-medium flex items-center justify-center space-x-1 border border-indigo-800/60 disabled:opacity-50 transition-colors"
+                    title="Poll real-time netflow via apiManager.fetchNetflows"
+                  >
+                    <Radio className={`w-3 h-3 text-indigo-400 ${isQueryingNansen ? "animate-spin" : ""}`} />
+                    <span>{isQueryingNansen ? "Querying..." : "Live Netflow"}</span>
+                  </button>
+                </div>
               </div>
             </div>
           </div>

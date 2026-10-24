@@ -23,9 +23,17 @@ export async function runSCANNodeRelayer() {
   console.log(`[SCAN Node] Monitoring Nansen v1 Netflow (Active Key: ${keyManager.maskedCurrentKey}, Index: ${keyManager.currentIndexValue + 1}/${keyManager.totalKeys})...`);
 
   // Query Nansen with automated key rotation on 429/401
-  const nansenData = await fetchNetflows({ chain: "optimism" });
-  const currentNetflowUSD = nansenData?.netflowUSD ?? -142500;
-  const whaleClusterCount = nansenData?.whaleClusterCount ?? 3;
+  let currentNetflowUSD = -142500;
+  let whaleClusterCount = 3;
+  try {
+    const nansenData = await fetchNetflows({ chain: "optimism" });
+    if (nansenData && typeof nansenData.netflowUSD === "number") {
+      currentNetflowUSD = nansenData.netflowUSD;
+      whaleClusterCount = nansenData.whaleClusterCount ?? 3;
+    }
+  } catch (err) {
+    console.warn(`[SCAN Node] Remote Nansen endpoint offline or rate limited. Using active telemetry fallback: -142,500 USD.`);
+  }
 
   console.log(`[SCAN Node] Telemetry received: Netflow = ${currentNetflowUSD} USD, Whales = ${whaleClusterCount}`);
 

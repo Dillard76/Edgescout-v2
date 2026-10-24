@@ -469,5 +469,41 @@ export const FloorPriceTrendChart: React.FC<FloorPriceTrendChartProps> = ({
     </ResponsiveContainer>
   );
 };`
+  },
+  {
+    path: "src/utils/apiManager.ts",
+    name: "apiManager.ts",
+    language: "typescript",
+    description: "Multi-key pool manager with automatic key rotation on HTTP 429 rate limit or 401 unauthorized errors.",
+    beginnerNote: "Handles automatic round-robin rotation across multiple Nansen API keys so live smart money netflow tracking never gets interrupted.",
+    content: `// Nansen KeyManager & fetchWithRetry
+export const API_KEY_POOL = [
+  process.env.NANSEN_API_KEY_2,
+  process.env.NANSEN_API_KEY_3,
+  process.env.NANSEN_API_KEY
+].filter(Boolean) as string[];
+
+export class KeyManager {
+  private currentIndex = 0;
+  get currentKey() { return API_KEY_POOL[this.currentIndex]; }
+  rotate() {
+    this.currentIndex = (this.currentIndex + 1) % API_KEY_POOL.length;
+    console.log(\`Key exhausted. Rotating to key index: \${this.currentIndex}\`);
+  }
+}
+
+export async function fetchWithRetry(url: string, options: RequestInit = {}, retries = 3): Promise<Response> {
+  for (let i = 0; i < retries; i++) {
+    const headers = { ...options.headers, 'x-api-key': keyManager.currentKey };
+    const response = await fetch(url, { ...options, headers });
+    if (response.ok) return response;
+    if (response.status === 429 || response.status === 401 || response.status === 403) {
+      keyManager.rotate();
+      continue;
+    }
+    throw new Error(\`Nansen API Error: \${response.status}\`);
+  }
+  throw new Error('All API keys exhausted or failed.');
+}`
   }
 ];

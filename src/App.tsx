@@ -11,6 +11,7 @@ import { PineconeExplorer } from "./components/PineconeExplorer";
 import { TestRunner } from "./components/TestRunner";
 import { BeginnerGuide } from "./components/BeginnerGuide";
 import { CodeExplorer } from "./components/CodeExplorer";
+import { WorkspaceHub } from "./components/WorkspaceHub";
 import { BlockchainEvent } from "./types";
 import { Shield, Users, Radio, Terminal, ExternalLink } from "lucide-react";
 
@@ -70,6 +71,13 @@ export default function App() {
             setCircuitBreakerActive={setCircuitBreakerActive}
             onEmitEvent={handleEmitEvent}
             events={events}
+          />
+        )}
+
+        {activeTab === "workspace" && (
+          <WorkspaceHub
+            beginnerMode={beginnerMode}
+            circuitBreakerActive={circuitBreakerActive}
           />
         )}
 

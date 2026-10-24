@@ -90,6 +90,7 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="flex space-x-1 border-t border-slate-800/80 pt-2 pb-2 overflow-x-auto text-sm no-scrollbar">
           {[
             { id: "command", label: "🎯 Live Agent Playground", desc: "Interactive Simulator" },
+            { id: "workspace", label: "☁️ Google & Firebase Hub", desc: "Drive, Sheets, Gmail, Firestore" },
             { id: "security", label: "🔒 Zero-Trust Sanitizer", desc: "Regex Redaction" },
             { id: "memory", label: "🧠 Pinecone 3072-D Memory", desc: "Vector Explorer" },
             { id: "tests", label: "🧪 Hardhat Unit Tests", desc: "Safety Proofs" },

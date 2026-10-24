@@ -1,0 +1,85 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile and configuration for EdgeScout",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "role": { "type": "string", "enum": ["user", "admin"] },
+        "notificationsEnabled": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "email", "role", "createdAt"]
+    },
+    "AcquisitionTarget": {
+      "title": "AcquisitionTarget",
+      "description": "NFT or asset target monitored by EdgeScout",
+      "type": "object",
+      "properties": {
+        "targetId": { "type": "string" },
+        "userId": { "type": "string" },
+        "collection": { "type": "string" },
+        "tokenId": { "type": "string" },
+        "artist": { "type": "string" },
+        "floorPriceEth": { "type": "string" },
+        "maxBidEth": { "type": "string" },
+        "discountBps": { "type": "string" },
+        "status": { "type": "string", "enum": ["MONITORING", "ACQUIRED", "FROZEN"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["targetId", "userId", "collection", "tokenId", "status", "createdAt"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Immutable on-chain or off-chain audit logs for risk alerts and trades",
+      "type": "object",
+      "properties": {
+        "logId": { "type": "string" },
+        "userId": { "type": "string" },
+        "eventType": { "type": "string", "enum": ["CircuitBreakerTripped", "AcquisitionExecuted", "OracleSync", "SecurityRedaction"] },
+        "summary": { "type": "string" },
+        "details": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["logId", "userId", "eventType", "summary", "createdAt"]
+    },
+    "WorkspaceSync": {
+      "title": "WorkspaceSync",
+      "description": "Record of exports or alerts to Google Drive, Sheets, or Gmail",
+      "type": "object",
+      "properties": {
+        "syncId": { "type": "string" },
+        "userId": { "type": "string" },
+        "service": { "type": "string", "enum": ["drive", "sheets", "gmail"] },
+        "title": { "type": "string" },
+        "externalId": { "type": "string" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["syncId", "userId", "service", "title", "status", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "User profile documents"
+    },
+    "/targets/{targetId}": {
+      "schema": { "$ref": "#/entities/AcquisitionTarget" },
+      "description": "EdgeScout tracked acquisition targets"
+    },
+    "/audit_logs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Auditable risk events and transactions"
+    },
+    "/workspace_syncs/{syncId}": {
+      "schema": { "$ref": "#/entities/WorkspaceSync" },
+      "description": "History of Google Workspace export operations"
+    }
+  }
+}
