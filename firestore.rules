@@ -1,0 +1,113 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net: Default-deny all unspecified routes
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Hardened Global Helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // UserProfile Validation
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['userId', 'email', 'role', 'createdAt']) &&
+        data.keys().hasOnly(['userId', 'email', 'displayName', 'role', 'notificationsEnabled', 'createdAt', 'updatedAt']) &&
+        data.userId is string && data.userId == request.auth.uid &&
+        data.email is string && data.email.size() <= 256 &&
+        data.role in ['user', 'admin'] &&
+        data.createdAt is string && data.createdAt.size() <= 64;
+    }
+
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isOwner(userId) && isValidId(userId) && isValidUserProfile(incoming());
+      allow update: if isOwner(userId) && isValidId(userId) && isValidUserProfile(incoming()) &&
+        incoming().userId == existing().userId &&
+        incoming().createdAt == existing().createdAt;
+      allow delete: if false;
+    }
+
+    // AcquisitionTarget Validation
+    function isValidTarget(data) {
+      return data.keys().hasAll(['targetId', 'userId', 'collection', 'tokenId', 'status', 'createdAt']) &&
+        data.keys().hasOnly(['targetId', 'userId', 'collection', 'tokenId', 'artist', 'floorPriceEth', 'maxBidEth', 'discountBps', 'status', 'createdAt', 'updatedAt']) &&
+        data.targetId is string && data.targetId.size() <= 64 &&
+        data.userId is string && data.userId == request.auth.uid &&
+        data.collection is string && data.collection.size() <= 128 &&
+        data.tokenId is string && data.tokenId.size() <= 32 &&
+        data.status in ['MONITORING', 'ACQUIRED', 'FROZEN'] &&
+        data.createdAt is string && data.createdAt.size() <= 64;
+    }
+
+    match /targets/{targetId} {
+      allow get: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(targetId) && isValidTarget(incoming());
+      allow update: if isSignedIn() && isValidId(targetId) && isValidTarget(incoming()) &&
+        incoming().userId == existing().userId &&
+        incoming().targetId == existing().targetId &&
+        incoming().createdAt == existing().createdAt;
+      allow delete: if isSignedIn() && existing().userId == request.auth.uid;
+    }
+
+    // AuditLog Validation (Immutable Append-Only Audit Trail)
+    function isValidAuditLog(data) {
+      return data.keys().hasAll(['logId', 'userId', 'eventType', 'summary', 'createdAt']) &&
+        data.keys().hasOnly(['logId', 'userId', 'eventType', 'summary', 'details', 'createdAt']) &&
+        data.logId is string && data.logId.size() <= 64 &&
+        data.userId is string && data.userId == request.auth.uid &&
+        data.eventType in ['CircuitBreakerTripped', 'AcquisitionExecuted', 'OracleSync', 'SecurityRedaction'] &&
+        data.summary is string && data.summary.size() <= 512 &&
+        data.createdAt is string && data.createdAt.size() <= 64;
+    }
+
+    match /audit_logs/{logId} {
+      allow get: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(logId) && isValidAuditLog(incoming());
+      allow update, delete: if false; // Strict audit immutability
+    }
+
+    // WorkspaceSync Validation
+    function isValidWorkspaceSync(data) {
+      return data.keys().hasAll(['syncId', 'userId', 'service', 'title', 'status', 'createdAt']) &&
+        data.keys().hasOnly(['syncId', 'userId', 'service', 'title', 'externalId', 'status', 'createdAt']) &&
+        data.syncId is string && data.syncId.size() <= 64 &&
+        data.userId is string && data.userId == request.auth.uid &&
+        data.service in ['drive', 'sheets', 'gmail'] &&
+        data.title is string && data.title.size() <= 256 &&
+        data.status is string && data.status.size() <= 64 &&
+        data.createdAt is string && data.createdAt.size() <= 64;
+    }
+
+    match /workspace_syncs/{syncId} {
+      allow get: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(syncId) && isValidWorkspaceSync(incoming());
+      allow update: if isSignedIn() && isValidId(syncId) && isValidWorkspaceSync(incoming()) &&
+        incoming().userId == existing().userId &&
+        incoming().createdAt == existing().createdAt;
+      allow delete: if isSignedIn() && existing().userId == request.auth.uid;
+    }
+  }
+}
