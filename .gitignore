@@ -8,3 +8,10 @@ artifacts/
 cache/
 .env*
 !.env.example
+
+# Sensitive credentials & local applet configurations
+firebase-applet-config.json
+firebase_applet_config.xml
+
+# AI Studio user attachments
+public/assets/aistudio/

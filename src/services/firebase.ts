@@ -12,7 +12,22 @@ import {
   orderBy,
   limit
 } from "firebase/firestore";
-import firebaseConfig from "../../firebase-applet-config.json";
+// Resolve Firebase config: dynamically check local config file or fallback to environment variables
+const configModules = import.meta.glob("../../firebase-applet-config.json", { eager: true });
+const localConfig = (configModules["../../firebase-applet-config.json"] as { default?: Record<string, string> })?.default;
+
+const firebaseConfig = {
+  projectId: localConfig?.projectId || import.meta.env.VITE_FIREBASE_PROJECT_ID || "gen-lang-client-0593936359",
+  appId: localConfig?.appId || import.meta.env.VITE_FIREBASE_APP_ID || "",
+  apiKey: localConfig?.apiKey || import.meta.env.VITE_FIREBASE_API_KEY || "",
+  authDomain: localConfig?.authDomain || import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "gen-lang-client-0593936359.firebaseapp.com",
+  firestoreDatabaseId: localConfig?.firestoreDatabaseId || import.meta.env.VITE_FIREBASE_FIRESTORE_DATABASE_ID || "ai-studio-edgescoutv2auton-32c7e276-44b0-4aa9-92d8-b9cfd658a012",
+  storageBucket: localConfig?.storageBucket || import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "gen-lang-client-0593936359.firebasestorage.app",
+  messagingSenderId: localConfig?.messagingSenderId || import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "",
+  measurementId: localConfig?.measurementId || "",
+  oAuthClientId: localConfig?.oAuthClientId || "",
+  recaptchaSiteKey: localConfig?.recaptchaSiteKey || "",
+};
 
 // Initialize Firebase App singleton
 export const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
