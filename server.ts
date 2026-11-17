@@ -5,6 +5,16 @@ import dotenv from "dotenv";
 import { GoogleGenAI } from "@google/genai";
 import { ethers } from "ethers";
 import { keyManager, fetchNetflows, API_KEY_POOL } from "./src/services/nansenClient.ts";
+import {
+  getMemoryState,
+  storeMemory,
+  testConnection as testPineconeConnection,
+  isLive as pineconeIsLive,
+  isDemo as pineconeIsDemo,
+  PINECONE_DIMENSION,
+  PINECONE_NAMESPACES,
+  type PineconeNamespace,
+} from "./src/services/pinecone.ts";
 
 dotenv.config();
 
@@ -110,68 +120,103 @@ function sanitizePayload(rawText: string) {
   };
 }
 
-// In-memory Pinecone 3072-D Vector Memory store
-const pineconeMemoryStore = {
-  dimension: 3072,
-  namespaces: {
-    identity: [
-      {
-        id: "ID-RISK-PROFILE-AGGRESSIVE",
-        vectorPreview: [0.038, -0.012, 0.089, -0.045, 0.112],
-        metadata: {
-          role: "Autonomous Buyer",
-          targetCollection: "_404/LostLayer",
-          targetTokenId: 4041,
-          artist: "Ry Hawthorne",
-          maxBidCeilingBps: 8000,
-          discountPercentage: "20.00%",
-          smartMoneyThresholdUSD: 25000,
-          network: "Optimism OP Stack (Chain ID: 10)",
-          circuitBreakerPolicy: "Immediate freeze on -$25k USD netflows or 3+ whale exchange deposits"
-        },
-        createdAt: "2026-10-01T08:00:00Z"
-      }
-    ],
-    strategies: [
-      {
-        id: "STRAT-OP-CB-202306",
-        vectorPreview: [0.071, -0.082, 0.019, 0.043, -0.091],
-        metadata: {
-          origin: "OP/Base Ecosystem Drop Analysis",
-          lesson: "Whale liquidity drains precede NFT floor collapses by an average of 42 minutes. Front-running the drop via contract interlock prevents illiquid inventory lockups.",
-          confidenceScore: 0.94
-        },
-        createdAt: "2026-10-02T14:30:00Z"
-      },
-      {
-        id: "STRAT-REFRACTION-VALUATION",
-        vectorPreview: [0.015, 0.092, -0.033, 0.125, -0.004],
-        metadata: {
-          visualSpec: "3D Refraction, Micro-Grid Light Emission, Octane Displacement, Spherical",
-          scarcityTier: "Sub-1% Trait Density in LostLayer",
-          targetValuationDiscount: "Mandatory 20% below spot floor"
-        },
-        createdAt: "2026-10-03T19:15:00Z"
-      }
-    ],
-    market_signals: [
-      {
-        id: "SIG-OP-4041-002",
-        vectorPreview: [-0.042, 0.061, 0.094, -0.011, 0.037],
-        metadata: {
-          tokenId: 4041,
-          floorPriceWei: "3400000000000000000",
-          floorPriceETH: "3.40",
-          maxBidWei: "2720000000000000000",
-          maxBidETH: "2.72",
-          netflowUSD: -142500,
-          status: "ARCHIVED_SIGNAL"
-        },
-        createdAt: "2026-10-05T12:00:00Z"
-      }
-    ]
+// Pinecone 3072-D Vector Memory — REAL client (src/services/pinecone.ts).
+// Live mode talks to the Pinecone index when PINECONE_API_KEY is set;
+// demo mode (no key) uses the client's in-memory store. The old
+// in-memory mock object that used to live here is gone — every read
+// and write below goes through the client, so the Explorer shows
+// exactly what Pinecone holds.
+
+// Deterministic placeholder embedding: a 3072-D pseudo-vector derived
+// from a seed string, so the same memory always maps to the same
+// vector. This is NOT a semantic embedding — it only exists so
+// memories can be stored before a real embedding model (e.g. Gemini
+// text-embedding) is wired in. The metadata is the real payload.
+function placeholderVector(seed: string): number[] {
+  let h1 = 0x811c9dc5;
+  let h2 = 0x01000193;
+  for (let i = 0; i < seed.length; i++) {
+    h1 = Math.imul(h1 ^ seed.charCodeAt(i), 16777619);
+    h2 = Math.imul(h2 ^ seed.charCodeAt(i), 16777619);
   }
-};
+  let s = (h1 ^ h2) >>> 0;
+  const values: number[] = new Array(PINECONE_DIMENSION);
+  for (let i = 0; i < PINECONE_DIMENSION; i++) {
+    // mulberry32 PRNG
+    s = (s + 0x6d2b79f5) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    const u = ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    values[i] = Number((u * 0.2 - 0.1).toFixed(4));
+  }
+  return values;
+}
+
+// Demo seed entries (the same starter memories the old mock shipped
+// with). Seeded once at boot in demo mode so the Explorer looks the
+// same as before; in live mode the index already holds its own data.
+const DEMO_SEED_MEMORIES: Array<{ namespace: PineconeNamespace; id: string; metadata: Record<string, any> }> = [
+  {
+    namespace: "identity",
+    id: "ID-RISK-PROFILE-AGGRESSIVE",
+    metadata: {
+      role: "Autonomous Buyer",
+      targetCollection: "_404/LostLayer",
+      targetTokenId: 4041,
+      artist: "Ry Hawthorne",
+      maxBidCeilingBps: 8000,
+      discountPercentage: "20.00%",
+      smartMoneyThresholdUSD: 25000,
+      network: "Optimism OP Stack (Chain ID: 10)",
+      circuitBreakerPolicy: "Immediate freeze on -$25k USD netflows or 3+ whale exchange deposits"
+    }
+  },
+  {
+    namespace: "strategies",
+    id: "STRAT-OP-CB-202306",
+    metadata: {
+      origin: "OP/Base Ecosystem Drop Analysis",
+      lesson: "Whale liquidity drains precede NFT floor collapses by an average of 42 minutes. Front-running the drop via contract interlock prevents illiquid inventory lockups.",
+      confidenceScore: 0.94
+    }
+  },
+  {
+    namespace: "strategies",
+    id: "STRAT-REFRACTION-VALUATION",
+    metadata: {
+      visualSpec: "3D Refraction, Micro-Grid Light Emission, Octane Displacement, Spherical",
+      scarcityTier: "Sub-1% Trait Density in LostLayer",
+      targetValuationDiscount: "Mandatory 20% below spot floor"
+    }
+  },
+  {
+    namespace: "market_signals",
+    id: "SIG-OP-4041-002",
+    metadata: {
+      tokenId: 4041,
+      floorPriceWei: "3400000000000000000",
+      floorPriceETH: "3.40",
+      maxBidWei: "2720000000000000000",
+      maxBidETH: "2.72",
+      netflowUSD: -142500,
+      status: "ARCHIVED_SIGNAL"
+    }
+  }
+];
+
+let demoSeeded = false;
+async function seedDemoMemory(): Promise<void> {
+  if (!pineconeIsDemo || demoSeeded) return;
+  demoSeeded = true;
+  for (const seed of DEMO_SEED_MEMORIES) {
+    try {
+      await storeMemory(seed.namespace, seed.id, placeholderVector(seed.id), seed.metadata);
+    } catch (err: any) {
+      console.warn(`[Pinecone] Demo seed failed for ${seed.id}: ${err.message}`);
+    }
+  }
+}
 
 // API: System Configuration & Metadata
 app.get("/api/system/info", (_req, res) => {
@@ -394,32 +439,36 @@ app.post("/api/nansen/netflow", async (req, res) => {
   }
 });
 
-// API: Pinecone 3072-D Vector Memory Explorer
-app.get("/api/pinecone/state", (_req, res) => {
-  res.json(pineconeMemoryStore);
+// API: Pinecone 3072-D Vector Memory Explorer (REAL client)
+app.get("/api/pinecone/state", async (_req, res) => {
+  try {
+    await seedDemoMemory();
+    const state = await getMemoryState();
+    res.json({ ...state, mode: pineconeIsLive ? "live" : "demo" });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.post("/api/pinecone/store", (req, res) => {
-  const { namespace, id, metadata } = req.body;
-  if (!pineconeMemoryStore.namespaces[namespace as keyof typeof pineconeMemoryStore.namespaces]) {
+app.post("/api/pinecone/store", async (req, res) => {
+  const { namespace, id, metadata, values } = req.body || {};
+  if (!PINECONE_NAMESPACES.includes(namespace)) {
     return res.status(400).json({ error: `Namespace must be 'identity', 'strategies', or 'market_signals'.` });
   }
 
-  const newEntry = {
-    id: id || `ENTRY-${Date.now()}`,
-    vectorPreview: [
-      Number((Math.random() * 0.2 - 0.1).toFixed(4)),
-      Number((Math.random() * 0.2 - 0.1).toFixed(4)),
-      Number((Math.random() * 0.2 - 0.1).toFixed(4)),
-      Number((Math.random() * 0.2 - 0.1).toFixed(4)),
-      Number((Math.random() * 0.2 - 0.1).toFixed(4))
-    ],
-    metadata: metadata || {},
-    createdAt: new Date().toISOString()
-  };
+  const entryId = id || `ENTRY-${Date.now()}`;
+  // Callers may supply a real 3072-D embedding; otherwise a deterministic
+  // placeholder vector is derived from the id + metadata (see above).
+  const vector = Array.isArray(values) && values.length === PINECONE_DIMENSION
+    ? values
+    : placeholderVector(entryId + JSON.stringify(metadata || {}));
 
-  (pineconeMemoryStore.namespaces as any)[namespace].push(newEntry);
-  res.json({ success: true, entry: newEntry });
+  try {
+    const entry = await storeMemory(namespace, entryId, vector, metadata || {});
+    res.json({ success: true, entry, mode: pineconeIsLive ? "live" : "demo" });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // API: 24/7 Continuous Relayer Cycle Runner
@@ -472,13 +521,6 @@ app.post("/api/relayer/cycle", async (req, res) => {
   // Step 4: Archive signal into Pinecone 3072-D vector memory
   const memoryEntry = {
     id: `SIG-RELAYER-${Date.now()}`,
-    vectorPreview: [
-      Number((Math.random() * 0.2 - 0.1).toFixed(4)),
-      Number((Math.random() * 0.2 - 0.1).toFixed(4)),
-      Number((Math.random() * 0.2 - 0.1).toFixed(4)),
-      Number((Math.random() * 0.2 - 0.1).toFixed(4)),
-      Number((Math.random() * 0.2 - 0.1).toFixed(4))
-    ],
     metadata: {
       cycleId,
       tokenId: 4041,
@@ -491,8 +533,14 @@ app.post("/api/relayer/cycle", async (req, res) => {
     },
     createdAt: timestamp
   };
-  (pineconeMemoryStore.namespaces.market_signals as any).push(memoryEntry);
-  logs.push(`[Pinecone] Signal archived to 'market_signals' namespace (ID: ${memoryEntry.id})`);
+  let pineconeStored = false;
+  try {
+    await storeMemory("market_signals", memoryEntry.id, placeholderVector(memoryEntry.id), memoryEntry.metadata);
+    pineconeStored = true;
+    logs.push(`[Pinecone] Signal archived to 'market_signals' namespace (ID: ${memoryEntry.id}, ${pineconeIsLive ? "live" : "demo"} mode)`);
+  } catch (err: any) {
+    logs.push(`[Pinecone] Signal archive FAILED: ${err.message}`);
+  }
 
   res.json({
     success: true,
@@ -522,6 +570,7 @@ app.post("/api/relayer/cycle", async (req, res) => {
       thresholdUSD: THRESHOLD_USD
     },
     pineconeEntryId: memoryEntry.id,
+    pineconeStored,
     logs
   });
 });
@@ -542,6 +591,9 @@ async function startServer() {
       res.sendFile(path.resolve(__dirname, "dist", "index.html"));
     });
   }
+
+  await seedDemoMemory();
+  await testPineconeConnection();
 
   app.listen(PORT, () => {
     console.log(`[EdgeScout v2] Running at http://localhost:${PORT}`);
