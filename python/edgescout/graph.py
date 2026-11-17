@@ -10,9 +10,13 @@ safe payload after 3 failed retries.
 
 NOTE: the "secret" in the first synthesizer draft (``sec_live_...``)
 is an intentionally fake demo value so the evaluator has something
-to catch on attempt 0. The parallel workers are simulated stubs —
-see the TODOs — until the real Nansen / Pinecone / contract APIs
-are wired in.
+to catch on attempt 0. The valuation and security workers now use
+LIVE free data (see ``market.py``): CoinGecko for the WETH price and
+GoPlus for contract safety checks. Pinecone retrieval is live when
+``PINECONE_API_KEY`` is set (see ``retrieval.py``) and simulated
+otherwise. The only remaining stub is the valuation model's 0.094
+WETH comp estimate itself, until a real Nansen key (paid) or a
+comps database is wired in.
 
 ``build_edgescout_workflow()`` returns the uncompiled workflow so
 ``persistence.build_durable_edgescout_graph()`` can compile the same
@@ -27,6 +31,14 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 from pydantic import BaseModel, Field, ValidationError
 
+from .market import (
+    derive_security_assessment,
+    fetch_token_security,
+    fetch_weth_usd_price,
+    is_contract_address,
+)
+from .retrieval import hybrid_pinecone_retrieval_node
+
 
 # =====================================================================
 # 1. STRICT PYDANTIC OUTPUT CONTRACT (UI & API Guarantee)
@@ -37,6 +49,7 @@ class EdgeScoutReport(BaseModel):
   risk_score: float = Field(ge=0.0, le=1.0)
   estimated_value: float = Field(ge=0.0)
   currency: str
+  estimated_value_usd: Optional[float] = None
   confidence: float = Field(ge=0.0, le=1.0)
   security_flags: List[str]
   executive_summary: str
@@ -83,7 +96,32 @@ def quarantine_untrusted_text(raw_text: str) -> str:
 def security_triage_worker(state: EdgeScoutState) -> Dict:
   target = state["target"]
   try:
-    # TODO: Replace with real contract/phishing/honeypot API call
+    # LIVE: GoPlus security check when the target is a contract address.
+    # Domain targets (e.g. darkone.x) have no contract address to check,
+    # so they stay "unverified" until an address is supplied.
+    if is_contract_address(target):
+      live = fetch_token_security(target)
+      if live is not None:
+        assessment = derive_security_assessment(live)
+        return {
+            "security_data": {
+                "risk_score": assessment["risk_score"],
+                "flags": assessment["flags"],
+                "raw_note": quarantine_untrusted_text(
+                    "GoPlus live token security check"
+                ),
+                "source": "goplus_live",
+            }
+        }
+      return {
+          "security_data": {
+              "risk_score": 1.0,
+              "flags": ["triage_api_timeout"],
+              "raw_note": "",
+              "source": "goplus_live",
+          },
+          "errors": ["Security Triage failed: GoPlus API unreachable"],
+      }
     return {
         "security_data": {
             "risk_score": 0.15,
@@ -91,6 +129,7 @@ def security_triage_worker(state: EdgeScoutState) -> Dict:
             "raw_note": quarantine_untrusted_text(
                 "Token metadata: Safe transfer"
             ),
+            "source": "no_contract_address",
         }
     }
   except Exception as e:
@@ -99,20 +138,17 @@ def security_triage_worker(state: EdgeScoutState) -> Dict:
             "risk_score": 1.0,
             "flags": ["triage_api_timeout"],
             "raw_note": "",
+            "source": "goplus_live",
         },
         "errors": [f"Security Triage failed: {str(e)}"],
     }
 
 
 def pinecone_retrieval_worker(state: EdgeScoutState) -> Dict:
-  target = state["target"]
+  # Delegates to retrieval.py: live Pinecone fetch when PINECONE_API_KEY
+  # is set, simulated comps otherwise.
   try:
-    # TODO: Replace with real Pinecone hybrid BM25/vector query
-    return {
-        "pinecone_comps": [
-            {"id": "comp_882", "similarity": 0.91, "historical_val": 0.092}
-        ]
-    }
+    return hybrid_pinecone_retrieval_node(state)
   except Exception as e:
     return {
         "pinecone_comps": [],
@@ -123,14 +159,24 @@ def pinecone_retrieval_worker(state: EdgeScoutState) -> Dict:
 def api_valuation_worker(state: EdgeScoutState) -> Dict:
   target = state["target"]
   try:
-    # TODO: Replace with real Nansen / DEX liquidity endpoint
-    return {
-        "valuation_data": {
-            "estimated_value": 0.094,
-            "currency": "WETH",
-            "confidence": 0.88,
-        }
+    # LIVE: current WETH price in USD (CoinGecko free API, no key).
+    # The 0.094 WETH comp estimate is still the model's output until a
+    # real Nansen key (paid) or comps database is wired in — but the
+    # dollar value is now computed from the live market, not a guess.
+    weth_usd = fetch_weth_usd_price()
+    estimated_weth = 0.094
+    valuation = {
+        "estimated_value": estimated_weth,
+        "currency": "WETH",
+        "confidence": 0.88,
     }
+    if weth_usd is not None:
+      valuation["weth_usd_price"] = weth_usd
+      valuation["estimated_value_usd"] = round(estimated_weth * weth_usd, 2)
+      valuation["price_source"] = "coingecko_live"
+    else:
+      valuation["price_source"] = "coingecko_unreachable"
+    return {"valuation_data": valuation}
   except Exception as e:
     return {
         "valuation_data": {
@@ -182,6 +228,7 @@ def synthesizer_node(state: EdgeScoutState) -> Dict:
       "risk_score": risk_score,
       "estimated_value": val.get("estimated_value", 0.0),
       "currency": val.get("currency", "WETH"),
+      "estimated_value_usd": val.get("estimated_value_usd"),
       "confidence": val.get("confidence", 0.0),
       "security_flags": sec.get("flags", []),
       "executive_summary": (

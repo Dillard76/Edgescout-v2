@@ -12,7 +12,9 @@ this package is the agent brain.
 | --- | --- |
 | `edgescout/evaluator_optimizer.py` | Standalone demo graph: generator drafts a valuation report, a critic enforces redaction + confidence bounds, loops back until it passes (max 3 retries, then a sanitized fallback). |
 | `edgescout/graph.py` | The full EdgeScout graph: parallel fan-out (security triage, Pinecone comps, API valuation) → synthesizer → deterministic evaluator (regex secret scan + strict Pydantic schema) → human escalation on HIGH/CRITICAL risk, or fallback after 3 failed retries. |
-| `edgescout/retrieval.py` | Hybrid BM25 + vector Pinecone retrieval node feeding comps to the synthesizer (simulated until a real index + embeddings are wired in). |
+| `edgescout/retrieval.py` | Pinecone retrieval node: live fetch-by-id + index stats when `PINECONE_API_KEY` is set, one marked simulated comp otherwise. |
+| `edgescout/market.py` | Free live data with no key: CoinGecko WETH price + GoPlus token security checks. |
+| `.env.example` | Environment variables (copy to `.env`, never commit it). |
 | `edgescout/persistence.py` | Durable Postgres checkpointing via a connection pool. Returns `(app, pool)` — keep the pool open while the app runs. |
 | `edgescout/observability/validation_gate.py` | `@validate_pipeline_output` decorator: structural + domain checks on pipeline outputs, with Prometheus counters/histograms. Works without `prometheus_client` installed (metrics skipped). |
 | `edgescout/observability/alerts.yml` | Prometheus alerting rules: validation failure rate > 10%, low-confidence spike. |
@@ -66,10 +68,23 @@ result = app.invoke(initial_state, config=config)
 - **Demo secrets are fake:** the `sec_live_...` values in the first
   drafts are intentionally fake, so the evaluator has something to
   catch on attempt 0. Never put real keys in code.
-- **Stubs with TODOs:** the parallel workers (`security_triage`,
-  `pinecone_lookup`, `api_valuation`) return simulated data until
-  the real Nansen / Pinecone / contract APIs are wired in. The
-  evaluator, routing, fallback, and escalation logic are all real.
+## Real data (#1) — what is live and what still needs a key
+
+- **Live now, no key:** the valuation worker prices WETH from
+  CoinGecko's free API, and the security worker runs a real GoPlus
+  check whenever the target is a contract address (honeypot, taxes,
+  proxy, open-source). If either API is unreachable the worker
+  falls back safely and says so in the output.
+- **Live with a free key:** Pinecone retrieval. Create a free
+  account at https://www.pinecone.io/ (one serverless index on the
+  free tier), copy the key into `.env` as `PINECONE_API_KEY`, and
+  the retrieval node fetches comps the agent actually stored
+  instead of the sample. Same variables as the repo root
+  `.env.example`.
+- **Still simulated:** the 0.094 WETH comp estimate itself — the
+  model has no comps database yet. Once Pinecone holds real stored
+  valuations, retrieval returns those instead. Nansen is paid, so
+  no Nansen key is needed for anything here yet.
 - **Validation gate wiring:** import it in a node module and decorate
   the node, e.g. the vision pricer:
 
