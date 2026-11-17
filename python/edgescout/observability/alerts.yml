@@ -1,0 +1,28 @@
+groups:
+  - name: edgescout_validation_alerts
+    rules:
+      - alert: EdgeScoutHighValidationFailureRate
+        expr: |
+          (
+            sum(rate(edgescout_validation_requests_total{status=~"FAILED|ERROR"}[5m])) by (function_name)
+            /
+            sum(rate(edgescout_validation_requests_total[5m])) by (function_name)
+          ) > 0.10
+        for: 2m
+        labels:
+          severity: warning
+          service: edgescout-agent
+        annotations:
+          summary: "High validation failure rate in {{ $labels.function_name }}"
+          description: "EdgeScout pipeline function {{ $labels.function_name }} has a validation failure rate exceeding 10% over the last 5 minutes. Check schema changes or API payload drift."
+
+      - alert: EdgeScoutLowConfidenceSpike
+        expr: |
+          sum(rate(edgescout_low_confidence_total[5m])) by (function_name) > 0.05
+        for: 3m
+        labels:
+          severity: critical
+          service: edgescout-agent
+        annotations:
+          summary: "Spike in low-confidence outputs for {{ $labels.function_name }}"
+          description: "EdgeScout is experiencing a high frequency of low-confidence scores in {{ $labels.function_name }}, indicating potential model degradation, hallucination, or data drift."

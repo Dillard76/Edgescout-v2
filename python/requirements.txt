@@ -1,0 +1,5 @@
+langgraph
+langgraph-checkpoint-postgres
+psycopg[binary]
+pydantic
+prometheus_client>=0.17.0
